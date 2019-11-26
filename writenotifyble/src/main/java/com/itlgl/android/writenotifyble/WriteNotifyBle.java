@@ -293,7 +293,7 @@ public class WriteNotifyBle extends BluetoothGattCallback {
         } catch (InterruptedException e) {
             e.printStackTrace();
         }
-        if(receiveData != null) {
+        if(receiveData != null && receiveData.length != 0) {
             return receiveData;
         } else {
             throw new Exception("接收指令错误");
@@ -341,6 +341,11 @@ public class WriteNotifyBle extends BluetoothGattCallback {
                 // 如果在连接过程中，比如正在刷服务的时候，蓝牙断开了，那么通知一下
                 connectResultQueue.offer(false);
                 disconnectResultQueue.offer(true);
+
+                // 断开连接后，停止阻塞
+                enableCharaQueue.offer(false);
+                receiveDataQueue.offer(new byte[0]);// offer(null)会报异常
+                writeCharaResponseQueue.offer(false);
                 break;
         }
     }
@@ -828,8 +833,16 @@ public class WriteNotifyBle extends BluetoothGattCallback {
         return receiveRule;
     }
 
+    public boolean isPrintLog() {
+        return printLog;
+    }
+
     public void setPrintServiceTree(boolean printServiceTree) {
         this.printServiceTree = printServiceTree;
+    }
+
+    public void setPrintLog(boolean printLog) {
+        this.printLog = printLog;
     }
 
     private void logi(String msg, Object... args) {
