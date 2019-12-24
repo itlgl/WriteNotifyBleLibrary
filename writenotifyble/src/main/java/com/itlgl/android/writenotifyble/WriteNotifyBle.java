@@ -26,9 +26,15 @@ import java.util.concurrent.BlockingQueue;
 import java.util.concurrent.TimeUnit;
 
 public class WriteNotifyBle extends BluetoothGattCallback {
-    public static final String TAG = "WriteNotifyBle";
+    private static final String TAG = "WriteNotifyBle";
 
+    /**
+     * 默认连接超时时间
+     */
     public static final long CONNECT_TIMEOUT = 10000;
+    /**
+     * 默认打开notify/indicate通道的超时时间
+     */
     public static final long ENABLE_CHARA_TIMEOUT = 3000;// ms
 
     /**
@@ -52,6 +58,7 @@ public class WriteNotifyBle extends BluetoothGattCallback {
 
     private long connectTimeout = CONNECT_TIMEOUT;
     private ConnectState connectState = ConnectState.None;
+    private ConnectStateListener connectStateListener;
 
     // setting params
     private UUID writeServiceUUID, writeCharaUUID, receiveServiceUUID, receiveCharaUUID;
@@ -117,17 +124,22 @@ public class WriteNotifyBle extends BluetoothGattCallback {
         }
 
         public Builder setPrintServiceTree(boolean print) {
-            instance.printServiceTree = print;
+            instance.setPrintServiceTree(print);
             return this;
         }
 
         public Builder setPrintLog(boolean print) {
-            instance.printLog = print;
+            instance.setPrintLog(print);
             return this;
         }
 
         public Builder setConnectTimeout(long timeout) {
-            instance.connectTimeout = timeout;
+            instance.setConnectTimeout(timeout);
+            return this;
+        }
+
+        public Builder setConnectStateListener(ConnectStateListener listener) {
+            instance.setConnectStateListener(listener);
             return this;
         }
 
@@ -168,11 +180,36 @@ public class WriteNotifyBle extends BluetoothGattCallback {
         connectTimeout = timeout;
     }
 
+    /**
+     * 设备是否连接
+     * @return 已连接返true，其他返false
+     */
     public boolean isConnected() {
         return connectState == ConnectState.Connected;
     }
 
-    public boolean connect(BluetoothDevice device) {
+    /**
+     * 获取连接状态
+     * @return 返回连接状态
+     */
+    public ConnectState getConnectState() {
+        return connectState;
+    }
+
+    /**
+     * 设置连接状态监听，可以不设置，可设置为空移除监听
+     * @param connectStateListener 监听器，可为空
+     */
+    public void setConnectStateListener(ConnectStateListener connectStateListener) {
+        this.connectStateListener = connectStateListener;
+    }
+
+    /**
+     * 连接设备，搜索service，但是不进行开通道的操作
+     * @param device 设备
+     * @return 成功与否
+     */
+    public boolean connectDevice(BluetoothDevice device) {
         connectResultQueue.clear();
         // 连接的时候设置不自动连接，如果断开了，就直接断开
         bluetoothGatt = device.connectGatt(context, false, this);
@@ -191,6 +228,17 @@ public class WriteNotifyBle extends BluetoothGattCallback {
             logi("连接失败");
             return false;
         }
+
+        return true;
+    }
+
+    /**
+     * 连接操作，包括连接设备、搜索service、开notify/indicate通道
+     * @param device 设备
+     * @return 成功与否
+     */
+    public boolean connect(BluetoothDevice device) {
+        connectDevice(device);
 
         // init service
         writeService = getService(writeServiceUUID);
@@ -221,6 +269,10 @@ public class WriteNotifyBle extends BluetoothGattCallback {
         return true;
     }
 
+    /**
+     * 断开ble连接
+     * @return 成功与否
+     */
     public int disconnect() {
         if (bluetoothGatt != null && connectState == ConnectState.Connected) {
             disconnectResultQueue.clear();
@@ -246,6 +298,13 @@ public class WriteNotifyBle extends BluetoothGattCallback {
         }
     }
 
+    /**
+     * 向设备传输数据，方法内部已经进行了分包操作，20字节一包
+     * @param data 数据
+     * @param timeout 超时时间
+     * @return 返回数据
+     * @throws Exception 出现错误时抛出异常
+     */
     public byte[] transmitData(byte[] data, long timeout) throws Exception {
         List<byte[]> frameList = new ArrayList<>();
         if(data.length > 20) {
@@ -347,6 +406,11 @@ public class WriteNotifyBle extends BluetoothGattCallback {
                 receiveDataQueue.offer(new byte[0]);// offer(null)会报异常
                 writeCharaResponseQueue.offer(false);
                 break;
+        }
+
+        // 回调状态变化
+        if(connectStateListener != null) {
+            connectStateListener.onConnectStateChange(connectState);
         }
     }
 
