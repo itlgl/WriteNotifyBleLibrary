@@ -77,6 +77,9 @@ public class WriteNotifyBle extends BluetoothGattCallback {
     private final BlockingQueue<Boolean> enableCharaQueue = new ArrayBlockingQueue<>(5);
     private final BlockingQueue<byte[]> receiveDataQueue = new ArrayBlockingQueue<>(5);
     private final BlockingQueue<Boolean> writeCharaResponseQueue = new ArrayBlockingQueue<>(5);
+    private final BlockingQueue<byte[]> readBatteryResponseQueue = new ArrayBlockingQueue<>(5);
+
+    private final Object gattCallbackObj = new Object();
 
     public interface ReceiveRule {
         boolean isValidResponse(byte[] response);
@@ -209,7 +212,7 @@ public class WriteNotifyBle extends BluetoothGattCallback {
      * @param device 设备
      * @return 成功与否
      */
-    public boolean connectDevice(BluetoothDevice device) {
+    public synchronized boolean connectDevice(BluetoothDevice device) {
         connectResultQueue.clear();
         // 连接的时候设置不自动连接，如果断开了，就直接断开
         bluetoothGatt = device.connectGatt(context, false, this);
@@ -237,7 +240,7 @@ public class WriteNotifyBle extends BluetoothGattCallback {
      * @param device 设备
      * @return 成功与否
      */
-    public boolean connect(BluetoothDevice device) {
+    public synchronized boolean connect(BluetoothDevice device) {
         connectDevice(device);
 
         // init service
@@ -273,7 +276,7 @@ public class WriteNotifyBle extends BluetoothGattCallback {
      * 断开ble连接
      * @return 成功与否
      */
-    public int disconnect() {
+    public synchronized int disconnect() {
         if (bluetoothGatt != null && connectState == ConnectState.Connected) {
             disconnectResultQueue.clear();
 
@@ -305,7 +308,7 @@ public class WriteNotifyBle extends BluetoothGattCallback {
      * @return 返回数据
      * @throws Exception 出现错误时抛出异常
      */
-    public byte[] transmitData(byte[] data, long timeout) throws Exception {
+    public synchronized byte[] transmitData(byte[] data, long timeout) throws Exception {
         List<byte[]> frameList = new ArrayList<>();
         if(data.length > 20) {
             int len = data.length / 20 + (data.length % 20 != 0 ? 1 : 0);
@@ -356,6 +359,29 @@ public class WriteNotifyBle extends BluetoothGattCallback {
             return receiveData;
         } else {
             throw new Exception("接收指令错误");
+        }
+    }
+
+    public int readBleElectricity() throws Exception {
+        if(!isConnected()) {
+            throw new Exception("蓝牙未连接");
+        }
+        BluetoothGattCharacteristic batteryChara = getCharacteristics(getService(UUIDDatabase.UUID_BATTERY_SERVICE), UUIDDatabase.UUID_BATTERY_LEVEL);
+        if(batteryChara == null) {
+            throw new Exception("设备不支持读电量");
+        }
+        readBatteryResponseQueue.clear();
+        bluetoothGatt.readCharacteristic(batteryChara);
+        byte[] bytes = null;
+        try {
+            bytes = readBatteryResponseQueue.poll(5, TimeUnit.SECONDS);
+        } catch (InterruptedException e) {
+            e.printStackTrace();
+        }
+        if(bytes != null && bytes.length > 0) {
+            return bytes[0] & 0xff;
+        } else {
+            throw new Exception("读取电量失败");
         }
     }
 
@@ -451,7 +477,7 @@ public class WriteNotifyBle extends BluetoothGattCallback {
     public void onCharacteristicRead(BluetoothGatt gatt, BluetoothGattCharacteristic characteristic, int status) {
         super.onCharacteristicRead(gatt, characteristic, status);
 
-        synchronized (this) {
+        synchronized (gattCallbackObj) {
             BluetoothDevice device = gatt.getDevice();
             String serviceUUID = characteristic.getService().getUuid().toString();
             String charaUUID = characteristic.getUuid().toString();
@@ -460,6 +486,10 @@ public class WriteNotifyBle extends BluetoothGattCallback {
             int serviceInstanceId = characteristic.getService().getInstanceId();
             logi(MessageFormat.format("[onCharacteristicRead] device={0},charaUUID={1},charaInstanceId={2},serviceInstanceId={3},status={4},value={5}",
                     device.getAddress(), charaUUID, charaInstanceId, serviceInstanceId, status, ByteUtil.toHex(value)));
+
+            if(UUIDDatabase.UUID_BATTERY_LEVEL.equals(characteristic.getUuid())) {
+                readBatteryResponseQueue.offer(value == null ? new byte[0] : value);
+            }
         }
     }
 
@@ -467,7 +497,7 @@ public class WriteNotifyBle extends BluetoothGattCallback {
     public void onCharacteristicWrite(BluetoothGatt gatt, BluetoothGattCharacteristic characteristic, int status) {
         super.onCharacteristicWrite(gatt, characteristic, status);
 
-        synchronized (this) {
+        synchronized (gattCallbackObj) {
             BluetoothDevice device = gatt.getDevice();
             String serviceUUID = characteristic.getService().getUuid().toString();
             String uuid = characteristic.getUuid().toString();
@@ -488,7 +518,7 @@ public class WriteNotifyBle extends BluetoothGattCallback {
     public void onCharacteristicChanged(BluetoothGatt gatt, BluetoothGattCharacteristic characteristic) {
         super.onCharacteristicChanged(gatt, characteristic);
 
-        synchronized (this) {
+        synchronized (gattCallbackObj) {
             BluetoothDevice device = gatt.getDevice();
             String serviceUUID = characteristic.getService().getUuid().toString();
             String uuid = characteristic.getUuid().toString();
@@ -514,33 +544,37 @@ public class WriteNotifyBle extends BluetoothGattCallback {
     public void onDescriptorRead(BluetoothGatt gatt, BluetoothGattDescriptor descriptor, int status) {
         super.onDescriptorRead(gatt, descriptor, status);
 
-        BluetoothDevice device = gatt.getDevice();
-        String serviceUUID = descriptor.getCharacteristic().getService().getUuid().toString();
-        String charaUUID = descriptor.getCharacteristic().getUuid().toString();
-        String descUUID = descriptor.getUuid().toString();
-        int serviceInstanceId = descriptor.getCharacteristic().getService().getInstanceId();
-        int charaInstanceId = descriptor.getCharacteristic().getInstanceId();
-        byte[] value = descriptor.getValue();
-        logi(MessageFormat.format("[onDescriptorRead] device={0},descUUID={1},charaUUID={2},value={3}",
-                device.getAddress(), descUUID, charaUUID, ByteUtil.toHex(value)));
+        synchronized (gattCallbackObj) {
+            BluetoothDevice device = gatt.getDevice();
+            String serviceUUID = descriptor.getCharacteristic().getService().getUuid().toString();
+            String charaUUID = descriptor.getCharacteristic().getUuid().toString();
+            String descUUID = descriptor.getUuid().toString();
+            int serviceInstanceId = descriptor.getCharacteristic().getService().getInstanceId();
+            int charaInstanceId = descriptor.getCharacteristic().getInstanceId();
+            byte[] value = descriptor.getValue();
+            logi(MessageFormat.format("[onDescriptorRead] device={0},descUUID={1},charaUUID={2},value={3}",
+                    device.getAddress(), descUUID, charaUUID, ByteUtil.toHex(value)));
+        }
     }
 
     @Override
     public void onDescriptorWrite(BluetoothGatt gatt, BluetoothGattDescriptor descriptor, int status) {
         super.onDescriptorWrite(gatt, descriptor, status);
 
-        BluetoothDevice device = gatt.getDevice();
-        String serviceUUID = descriptor.getCharacteristic().getService().getUuid().toString();
-        String charaUUID = descriptor.getCharacteristic().getUuid().toString();
-        String descUUID = descriptor.getUuid().toString();
-        int serviceInstanceId = descriptor.getCharacteristic().getService().getInstanceId();
-        int charaInstanceId = descriptor.getCharacteristic().getInstanceId();
-        byte[] value = descriptor.getValue();
-        logi(MessageFormat.format("[onDescriptorRead] device={0},descUUID={1},charaUUID={2}",
-                device.getAddress(), descUUID, charaUUID));
+        synchronized (gattCallbackObj) {
+            BluetoothDevice device = gatt.getDevice();
+            String serviceUUID = descriptor.getCharacteristic().getService().getUuid().toString();
+            String charaUUID = descriptor.getCharacteristic().getUuid().toString();
+            String descUUID = descriptor.getUuid().toString();
+            int serviceInstanceId = descriptor.getCharacteristic().getService().getInstanceId();
+            int charaInstanceId = descriptor.getCharacteristic().getInstanceId();
+            byte[] value = descriptor.getValue();
+            logi(MessageFormat.format("[onDescriptorRead] device={0},descUUID={1},charaUUID={2}",
+                    device.getAddress(), descUUID, charaUUID));
 
-        if(descriptor != null && descriptor.getUuid().equals(UUIDDatabase.UUID_CLIENT_CHARACTERISTIC_CONFIG)) {
-            enableCharaQueue.offer(true);
+            if (descriptor != null && descriptor.getUuid().equals(UUIDDatabase.UUID_CLIENT_CHARACTERISTIC_CONFIG)) {
+                enableCharaQueue.offer(true);
+            }
         }
     }
 
