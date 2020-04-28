@@ -362,7 +362,7 @@ public class WriteNotifyBle extends BluetoothGattCallback {
         }
     }
 
-    public int readBleElectricity() throws Exception {
+    public synchronized int readBleElectricity() throws Exception {
         if(!isConnected()) {
             throw new Exception("蓝牙未连接");
         }
@@ -652,7 +652,7 @@ public class WriteNotifyBle extends BluetoothGattCallback {
         return characteristic.getDescriptor(descriptorUUID);
     }
 
-    public /*synchronized*/ boolean setCharacteristicNotification(
+    public synchronized boolean setCharacteristicNotification(
             BluetoothGattCharacteristic characteristic, boolean enabled) {
         if(!isConnected()) {
             loge("蓝牙连接已断开");
@@ -705,7 +705,7 @@ public class WriteNotifyBle extends BluetoothGattCallback {
         }
     }
 
-    public /*synchronized*/ boolean setCharacteristicIndication(
+    public synchronized boolean setCharacteristicIndication(
             BluetoothGattCharacteristic characteristic, boolean enabled) {
         if(!isConnected()) {
             loge("蓝牙连接已断开");
@@ -765,6 +765,9 @@ public class WriteNotifyBle extends BluetoothGattCallback {
         }
         bgc.setWriteType(writeType);
         boolean setValue = bgc.setValue(value);
+        if(!setValue) {
+            return false;
+        }
         boolean writeCharacteristic = bluetoothGatt.writeCharacteristic(bgc);
         logi("写入一包数据:" + ByteUtil.toHex(value));
         return writeCharacteristic;
